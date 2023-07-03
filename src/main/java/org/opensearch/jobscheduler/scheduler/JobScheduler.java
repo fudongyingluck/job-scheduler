@@ -14,6 +14,7 @@ import org.opensearch.jobscheduler.spi.ScheduledJobParameter;
 import org.opensearch.jobscheduler.spi.ScheduledJobRunner;
 import org.opensearch.jobscheduler.spi.JobDocVersion;
 import org.opensearch.jobscheduler.spi.utils.LockService;
+import org.opensearch.jobscheduler.sweeper.JobSweeper;
 import org.opensearch.jobscheduler.utils.VisibleForTesting;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -69,7 +70,8 @@ public class JobScheduler {
         ScheduledJobParameter scheduledJobParameter,
         ScheduledJobRunner jobRunner,
         JobDocVersion version,
-        Double jitterLimit
+        Double jitterLimit,
+        JobSweeper.ScheduleFailedCallback scheduleFailedCallback
     ) {
         if (!scheduledJobParameter.isEnabled()) {
             return false;
@@ -80,6 +82,7 @@ public class JobScheduler {
             jobInfo = this.scheduledJobInfo.getJobInfo(indexName, docId);
             if (jobInfo == null) {
                 jobInfo = new JobSchedulingInfo(indexName, docId, scheduledJobParameter);
+                jobInfo.setScheduleFailedCallback(scheduleFailedCallback);
                 this.scheduledJobInfo.addJob(indexName, docId, jobInfo);
             }
             if (jobInfo.getScheduledCancellable() != null) {
@@ -119,14 +122,10 @@ public class JobScheduler {
         jobInfo.setExpectedPreviousExecutionTime(null);
         Scheduler.ScheduledCancellable scheduledCancellable = jobInfo.getScheduledCancellable();
 
-        if (scheduledCancellable != null) {
-            if (scheduledCancellable.cancel()) {
-                this.scheduledJobInfo.removeJob(indexName, id);
-            } else {
-                return false;
-            }
+        if (scheduledCancellable != null && scheduledCancellable.cancel() == false) {
+            return false;
         }
-
+        this.scheduledJobInfo.removeJob(indexName, id);
         return true;
     }
 
@@ -198,13 +197,23 @@ public class JobScheduler {
             return false;
         }
 
-        jobInfo.setScheduledCancellable(
-            this.threadPool.schedule(
-                runnable,
-                new TimeValue(duration.toNanos(), TimeUnit.NANOSECONDS),
-                JobSchedulerPlugin.OPEN_DISTRO_JOB_SCHEDULER_THREAD_POOL_NAME
-            )
-        );
+        try {
+            jobInfo.setScheduledCancellable(
+                this.threadPool.schedule(
+                    runnable,
+                    new TimeValue(duration.toNanos(), TimeUnit.NANOSECONDS),
+                    JobSchedulerPlugin.OPEN_DISTRO_JOB_SCHEDULER_THREAD_POOL_NAME
+                )
+            );
+        } catch (Exception e) {
+            if (jobInfo.getScheduleFailedCallback() != null) {
+                log.warn("job {} schedule failed with exception {}", jobParameter.getName(), e);
+                jobInfo.getScheduleFailedCallback().apply(jobInfo.getIndexName(), jobInfo.getJobId());
+            } else {
+                throw e;
+            }
+            return false;
+        }
 
         return true;
     }

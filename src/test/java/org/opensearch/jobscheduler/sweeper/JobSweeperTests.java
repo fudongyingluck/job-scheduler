@@ -8,6 +8,7 @@
  */
 package org.opensearch.jobscheduler.sweeper;
 
+import org.junit.Assert;
 import org.opensearch.jobscheduler.JobSchedulerSettings;
 import org.opensearch.jobscheduler.ScheduledJobProvider;
 import org.opensearch.jobscheduler.scheduler.JobScheduler;
@@ -63,6 +64,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({ "unchecked", "rawtypes" })
 public class JobSweeperTests extends OpenSearchAllocationTestCase {
@@ -255,7 +257,8 @@ public class JobSweeperTests extends OpenSearchAllocationTestCase {
                 Mockito.any(),
                 Mockito.any(),
                 Mockito.any(JobDocVersion.class),
-                Mockito.any(Double.class)
+                Mockito.any(Double.class),
+                Mockito.any()
             );
 
         ScheduledJobParameter mockJobParameter = Mockito.mock(ScheduledJobParameter.class);
@@ -271,8 +274,20 @@ public class JobSweeperTests extends OpenSearchAllocationTestCase {
                 Mockito.any(),
                 Mockito.any(),
                 Mockito.any(JobDocVersion.class),
-                Mockito.any(Double.class)
+                Mockito.any(Double.class),
+                Mockito.any()
             );
+    }
+
+    public void testScheduleFailedCallback() {
+        ConcurrentHashMap<String, JobDocVersion> jobVersionMap = new ConcurrentHashMap<>();
+        jobVersionMap.put("job-id", new JobDocVersion(1, 1, 1));
+
+        JobSweeper.ScheduleFailedCallback scheduleFailedCallback = sweeper.genScheduleFailedCallback(jobVersionMap);
+        scheduleFailedCallback.apply("index-name", "job-id");
+        Mockito.when(this.scheduler.deschedule(Mockito.anyString(), Mockito.anyString())).thenReturn(true);
+        Mockito.verify(this.scheduler).deschedule(Mockito.anyString(), Mockito.anyString());
+        Assert.assertNull(jobVersionMap.get("job-id"));
     }
 
     private ClusterState addNodesToCluter(ClusterState clusterState, int nodeCount) {

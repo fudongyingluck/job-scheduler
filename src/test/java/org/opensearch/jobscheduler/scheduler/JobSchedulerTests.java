@@ -29,6 +29,8 @@ import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @RunWith(RandomizedRunner.class)
 @SuppressWarnings({ "rawtypes" })
@@ -64,11 +66,11 @@ public class JobSchedulerTests extends OpenSearchTestCase {
         Scheduler.ScheduledCancellable cancellable = Mockito.mock(Scheduler.ScheduledCancellable.class);
         Mockito.when(this.threadPool.schedule(Mockito.any(), Mockito.any(), Mockito.anyString())).thenReturn(cancellable);
 
-        boolean scheduled = this.scheduler.schedule("index", "job-id", jobParameter, runner, dummyVersion, jitterLimit);
+        boolean scheduled = this.scheduler.schedule("index", "job-id", jobParameter, runner, dummyVersion, jitterLimit, null);
         Assert.assertTrue(scheduled);
         Mockito.verify(this.threadPool, Mockito.times(1)).schedule(Mockito.any(), Mockito.any(), Mockito.anyString());
 
-        scheduled = this.scheduler.schedule("index", "job-id", jobParameter, runner, dummyVersion, jitterLimit);
+        scheduled = this.scheduler.schedule("index", "job-id", jobParameter, runner, dummyVersion, jitterLimit, null);
         Assert.assertTrue(scheduled);
         // already scheduled, no extra threadpool call
         Mockito.verify(this.threadPool, Mockito.times(1)).schedule(Mockito.any(), Mockito.any(), Mockito.anyString());
@@ -83,7 +85,7 @@ public class JobSchedulerTests extends OpenSearchTestCase {
             new CronSchedule("* * * * *", ZoneId.systemDefault()),
             false
         );
-        boolean scheduled = this.scheduler.schedule("index-name", "job-id", jobParameter, null, dummyVersion, jitterLimit);
+        boolean scheduled = this.scheduler.schedule("index-name", "job-id", jobParameter, null, dummyVersion, jitterLimit, null);
         Assert.assertFalse(scheduled);
     }
 
@@ -141,6 +143,36 @@ public class JobSchedulerTests extends OpenSearchTestCase {
     public void testReschedule_noEnableTime() {
         ScheduledJobParameter jobParameter = buildScheduledJobParameter("job-id", "dummy job name", null, null, null, false);
         Assert.assertFalse(this.scheduler.reschedule(jobParameter, null, null, dummyVersion, jitterLimit));
+    }
+
+    public void testReschedule_Exception() {
+        Schedule schedule = Mockito.mock(Schedule.class);
+        ScheduledJobParameter jobParameter = buildScheduledJobParameter(
+            "job-id",
+            "dummy job name",
+            Instant.now().minus(1, ChronoUnit.HOURS),
+            Instant.now(),
+            schedule,
+            false,
+            0.6
+        );
+        AtomicInteger failedJob = new AtomicInteger();
+        JobSchedulingInfo jobSchedulingInfo = new JobSchedulingInfo("job-index", "job-id", jobParameter);
+        jobSchedulingInfo.setDescheduled(false);
+        jobSchedulingInfo.setScheduleFailedCallback((indexName, jobId) -> { failedJob.getAndIncrement(); });
+        this.scheduler.getScheduledJobInfo().addJob("job-index", "job-id", jobSchedulingInfo);
+
+        Instant now = Instant.now();
+        Mockito.when(schedule.getNextExecutionTime(Mockito.any()))
+            .thenReturn(now.plus(1, ChronoUnit.MINUTES))
+            .thenReturn(now.plus(2, ChronoUnit.MINUTES));
+
+        Mockito.when(this.threadPool.schedule(Mockito.any(), Mockito.any(), Mockito.anyString()))
+            .thenThrow(new RejectedExecutionException("reject exception in add to thread pool"));
+
+        Assert.assertFalse(this.scheduler.reschedule(jobParameter, jobSchedulingInfo, null, dummyVersion, jitterLimit));
+        Mockito.verify(this.threadPool).schedule(Mockito.any(), Mockito.any(), Mockito.anyString());
+        Assert.assertEquals(1, failedJob.get());
     }
 
     public void testReschedule_jobDescheduled() {

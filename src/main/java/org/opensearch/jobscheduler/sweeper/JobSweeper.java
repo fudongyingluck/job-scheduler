@@ -232,6 +232,25 @@ public class JobSweeper extends LifecycleListener implements IndexingOperationLi
         }
     }
 
+    public interface ScheduleFailedCallback {
+        void apply(String indexName, String jobId);
+    }
+
+    public ScheduleFailedCallback genScheduleFailedCallback(ConcurrentHashMap<String, JobDocVersion> jobVersionMap) {
+        if (jobVersionMap == null) {
+            throw new IllegalArgumentException("[after job schedule failed], invalid jobVersionMap == null");
+        }
+        return (indexName, jobId) -> {
+            log.warn("[after job schedule failed], index {}, job {}", indexName, jobId);
+
+            boolean res = this.scheduler.deschedule(indexName, jobId);
+            log.warn("[after job schedule failed], deschedule job {} result {}", jobId, res);
+
+            JobDocVersion jobDocVersion = jobVersionMap.remove(jobId);
+            log.warn("[after job schedule failed], remove job from sweptJobs, {} = {}", jobId, jobDocVersion);
+        };
+    }
+
     @VisibleForTesting
     void sweep(ShardId shardId, String docId, BytesReference jobSource, JobDocVersion jobDocVersion) {
         ConcurrentHashMap<String, JobDocVersion> jobVersionMap;
@@ -266,7 +285,15 @@ public class JobSweeper extends LifecycleListener implements IndexingOperationLi
                     }
                     ScheduledJobRunner jobRunner = this.indexToProviders.get(shardId.getIndexName()).getJobRunner();
                     if (jobParameter.isEnabled()) {
-                        this.scheduler.schedule(shardId.getIndexName(), docId, jobParameter, jobRunner, jobDocVersion, jitterLimit);
+                        this.scheduler.schedule(
+                            shardId.getIndexName(),
+                            docId,
+                            jobParameter,
+                            jobRunner,
+                            jobDocVersion,
+                            jitterLimit,
+                            genScheduleFailedCallback(jobVersionMap)
+                        );
                     }
                     return jobDocVersion;
                 } catch (Exception e) {

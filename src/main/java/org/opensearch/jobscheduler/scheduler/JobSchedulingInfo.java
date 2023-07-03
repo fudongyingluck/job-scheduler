@@ -9,6 +9,7 @@
 package org.opensearch.jobscheduler.scheduler;
 
 import org.opensearch.jobscheduler.spi.ScheduledJobParameter;
+import org.opensearch.jobscheduler.sweeper.JobSweeper;
 import org.opensearch.threadpool.Scheduler;
 
 import java.time.Instant;
@@ -23,11 +24,20 @@ class JobSchedulingInfo {
     private Instant expectedPreviousExecutionTime;
     private Instant expectedExecutionTime;
     private Scheduler.ScheduledCancellable scheduledCancellable;
+    private JobSweeper.ScheduleFailedCallback scheduleFailedCallback = null;
 
     JobSchedulingInfo(String indexName, String jobId, ScheduledJobParameter jobParameter) {
         this.indexName = indexName;
         this.jobId = jobId;
         this.jobParameter = jobParameter;
+    }
+
+    public JobSweeper.ScheduleFailedCallback getScheduleFailedCallback() {
+        return scheduleFailedCallback;
+    }
+
+    public void setScheduleFailedCallback(JobSweeper.ScheduleFailedCallback scheduleFailedCallback) {
+        this.scheduleFailedCallback = scheduleFailedCallback;
     }
 
     public String getIndexName() {
